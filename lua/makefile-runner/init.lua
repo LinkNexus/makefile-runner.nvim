@@ -101,23 +101,23 @@ local function get_makefile_targets()
 end
 
 -- Build floaterm command with custom options
-local function build_floaterm_cmd(target)
+local function build_floaterm_cmd(make_command)
 	local opts = config.floaterm
 	local cmd = string.format(
-		"FloatermNew --width=%s --height=%s --wintype=%s --position=%s --autoclose=%s make %s",
+		"FloatermNew --width=%s --height=%s --wintype=%s --position=%s --autoclose=%s %s",
 		opts.width,
 		opts.height,
 		opts.wintype,
 		opts.position,
 		opts.autoclose,
-		target
+		make_command
 	)
 	return cmd
 end
 
 -- Execute make command in floaterm
-local function run_make_target(target)
-	if not target or target == "" then
+local function run_make_target(target_name, target_description)
+	if not target_name or target_name == "" then
 		return
 	end
 
@@ -127,8 +127,42 @@ local function run_make_target(target)
 		return
 	end
 
-	local cmd = build_floaterm_cmd(target)
-	vim.cmd(cmd)
+	-- Check if target expects parameters (contains c= or other parameter patterns)
+	local needs_param = target_description
+		and (
+			target_description:match("c=")
+			or target_description:match("pass the parameter")
+			or target_description:match("example:")
+		)
+
+	if needs_param then
+		-- Extract example from description if available
+		local example = target_description:match("example:%s*make%s+%S+%s+(.+)")
+		local prompt = string.format('Enter parameters for "%s"', target_name)
+		if example then
+			prompt = prompt .. string.format(" (e.g., %s)", example)
+		end
+
+		vim.ui.input({
+			prompt = prompt .. ": ",
+			default = "",
+		}, function(input)
+			if input then
+				local make_cmd
+				if input == "" then
+					make_cmd = string.format("make %s", target_name)
+				else
+					make_cmd = string.format("make %s %s", target_name, string.format('c="%s"', input))
+				end
+				local cmd = build_floaterm_cmd(make_cmd)
+				vim.cmd(cmd)
+			end
+		end)
+	else
+		local make_cmd = string.format("make %s", target_name)
+		local cmd = build_floaterm_cmd(make_cmd)
+		vim.cmd(cmd)
+	end
 end
 
 -- Format target for display
@@ -199,7 +233,7 @@ function M.show_with_telescope()
 				actions.select_default:replace(function()
 					actions.close(prompt_bufnr)
 					local selection = action_state.get_selected_entry()
-					run_make_target(selection.value.name)
+					run_make_target(selection.value.name, selection.value.description)
 				end)
 				return true
 			end,
@@ -223,8 +257,11 @@ function M.show_with_fzf()
 
 	-- Format targets for display
 	local formatted_targets = {}
+	local target_map = {}
 	for _, target in ipairs(targets) do
-		table.insert(formatted_targets, format_target(target))
+		local formatted = format_target(target)
+		table.insert(formatted_targets, formatted)
+		target_map[formatted] = target
 	end
 
 	fzf.fzf_exec(formatted_targets, {
@@ -232,9 +269,8 @@ function M.show_with_fzf()
 		actions = {
 			["default"] = function(selected)
 				if selected and #selected > 0 then
-					-- Extract target name from formatted string
-					local target_name = selected[1]:match("^(%S+)")
-					run_make_target(target_name)
+					local target = target_map[selected[1]]
+					run_make_target(target.name, target.description)
 				end
 			end,
 		},
@@ -247,6 +283,14 @@ end
 
 -- Auto-detect which fuzzy finder to use
 function M.show()
+	if config.picker == "telecope" then
+		M.show_with_telescope()
+		return
+	elseif config.picker == "fzf" then
+		M.show_with_fzf()
+		return
+	end
+
 	local has_telescope = pcall(require, "telescope")
 	local has_fzf = pcall(require, "fzf-lua")
 
@@ -333,4 +377,3 @@ function M.setup(opts)
 end
 
 return M
-
